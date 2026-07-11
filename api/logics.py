@@ -893,7 +893,7 @@ class Logics:
         if order.status == Order.Status.FAI:
             if order.payout.status != LNPayment.Status.EXPIRE:
                 return False, new_error(3001)
-        if order.status == Order.Status.PAY:
+        if order.status not in (Order.Status.WF2, Order.Status.WFI, Order.Status.FAI):
             return False, new_error(3001)
         if order.payout and order.payout.status == LNPayment.Status.FLIGHT:
             return False, new_error(3001)
