@@ -1,4 +1,5 @@
 import hashlib
+import time
 from datetime import timedelta
 
 from channels.db import database_sync_to_async
@@ -13,10 +14,28 @@ from rest_framework.authtoken.models import Token
 from api.errors import new_error
 from api.nick_generator.nick_generator import NickGenerator
 from api.utils import base91_to_hex, hex_to_base91, is_valid_token, validate_pgp_keys
+from decouple import config
 
 NickGen = NickGenerator(
     lang="English", use_adv=False, use_adj=True, use_noun=True, max_num=999
 )
+
+_robot_creation_times = []
+
+
+def _allow_new_robot(rate, window):
+    """Limits new robot creation rate. Set ROBOT_CREATION_RATE > 0 to enable (0 disables)."""
+    if rate <= 0:
+        return True
+    now = time.time()
+    cutoff = now - window
+    recent = [t for t in _robot_creation_times if t > cutoff]
+    _robot_creation_times.clear()
+    _robot_creation_times.extend(recent)
+    if len(recent) >= rate:
+        return False
+    _robot_creation_times.append(now)
+    return True
 
 
 class DisableCSRFMiddleware(object):
@@ -91,6 +110,20 @@ class RobotTokenSHA256AuthenticationMiddleWare:
                 update_last_login(None, token.user)
 
         except Token.DoesNotExist:
+            if not _allow_new_robot(
+                config("ROBOT_CREATION_RATE", cast=int, default=0),
+                config("ROBOT_CREATION_WINDOW", cast=int, default=1),
+            ):
+                return JsonResponse(
+                    new_error(
+                        7002,
+                        {
+                            "bad_keys_context": "Too many robots being created. Try again later."
+                        },
+                    ),
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+
             # If we get here the user does not have a robot on this coordinator
             # Let's create a new user & robot on-the-fly.
 
