@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import time
 from html import escape
 
 import gnupg
@@ -358,8 +359,55 @@ def compute_avg_premium(queryset):
     return weighted_median_premium, total_volume
 
 
+_robot_creation_times = []
+
+
+def _allow_new_robot(rate, window):
+    """Limits new robot creation rate. Set ROBOT_CREATION_RATE > 0 to enable (0 disables)."""
+    if rate <= 0:
+        return True
+    now = time.time()
+    cutoff = now - window
+    recent = [t for t in _robot_creation_times if t > cutoff]
+    _robot_creation_times.clear()
+    _robot_creation_times.extend(recent)
+    if len(recent) >= rate:
+        return False
+    _robot_creation_times.append(now)
+    return True
+
+
+_ARMOR_BODY_LINE = re.compile(r"^[A-Za-z0-9+/]+=?$")
+
+
+def _is_well_formed_pgp_key(key_text: str) -> bool:
+    lines = key_text.strip().splitlines()
+    if len(lines) < 4:
+        return False
+    if not lines[0].startswith("-----BEGIN PGP PUBLIC KEY BLOCK-----"):
+        return False
+    if not lines[-1].startswith("-----END PGP PUBLIC KEY BLOCK-----"):
+        return False
+    try:
+        blank_idx = next(
+            i for i, line in enumerate(lines[1:-1], 1) if line.strip() == ""
+        )
+    except StopIteration:
+        return False
+    for line in lines[blank_idx + 1 : -1]:
+        if line.startswith("="):
+            continue
+        if not _ARMOR_BODY_LINE.match(line):
+            return False
+    return True
+
+
 def validate_pgp_keys(pub_key, enc_priv_key):
     """Validates PGP valid keys. Formats them in a way understandable by the frontend"""
+
+    # Standardize format with linux linebreaks '\n'. Windows users submitting their own keys have '\r\n' breaking communication.
+    enc_priv_key = enc_priv_key.replace("\r\n", "\n").replace("\\", "\n")
+    pub_key = pub_key.replace("\r\n", "\n").replace("\\", "\n")
 
     if Robot.objects.filter(public_key=pub_key).exists():
         return (
@@ -369,11 +417,38 @@ def validate_pgp_keys(pub_key, enc_priv_key):
             None,
         )
 
-    gpg = gnupg.GPG(gnupghome=config("GNUPG_DIR", default=None))
+    if not _is_well_formed_pgp_key(pub_key):
+        return (
+            False,
+            new_error(
+                1034,
+                {
+                    "import_pub_result_stderr": "Invalid PGP key format",
+                    "import_pub_result_returncode": "",
+                    "import_pub_result_summary": "",
+                    "import_pub_result_results": str([]),
+                    "import_pub_result_imported": "0",
+                },
+            ),
+            None,
+            None,
+        )
 
-    # Standardize format with linux linebreaks '\n'. Windows users submitting their own keys have '\r\n' breaking communication.
-    enc_priv_key = enc_priv_key.replace("\r\n", "\n").replace("\\", "\n")
-    pub_key = pub_key.replace("\r\n", "\n").replace("\\", "\n")
+    if not _allow_new_robot(
+        config("ROBOT_CREATION_RATE", cast=int, default=0),
+        config("ROBOT_CREATION_WINDOW", cast=int, default=1),
+    ):
+        return (
+            False,
+            new_error(
+                7002,
+                {"bad_keys_context": "Too many robots being created. Try again later."},
+            ),
+            None,
+            None,
+        )
+
+    gpg = gnupg.GPG(gnupghome=config("GNUPG_DIR", default=None))
 
     # Try to import the public key
     import_pub_result = gpg.import_keys(pub_key)
