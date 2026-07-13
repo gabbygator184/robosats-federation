@@ -11,6 +11,7 @@ from base91 import decode, encode
 from decouple import config
 
 from api.errors import new_error
+from api.models import Robot
 
 logger = logging.getLogger("api.utils")
 
@@ -359,6 +360,15 @@ def compute_avg_premium(queryset):
 
 def validate_pgp_keys(pub_key, enc_priv_key):
     """Validates PGP valid keys. Formats them in a way understandable by the frontend"""
+
+    if Robot.objects.filter(public_key=pub_key).exists():
+        return (
+            False,
+            new_error(1055),
+            None,
+            None,
+        )
+
     gpg = gnupg.GPG(gnupghome=config("GNUPG_DIR", default=None))
 
     # Standardize format with linux linebreaks '\n'. Windows users submitting their own keys have '\r\n' breaking communication.
