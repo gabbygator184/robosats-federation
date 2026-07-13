@@ -370,7 +370,10 @@ def validate_pgp_keys(pub_key, enc_priv_key):
     if not import_pub_result.imported == 1:
         # If a robot is deleted and it is rebuilt with the same pubKey, the key will not be imported again
         # so we assert that the import error is "Not actually changed"
-        if "Not actually changed" not in import_pub_result.results[0]["text"]:
+        if (
+            import_pub_result.results
+            and "Not actually changed" not in import_pub_result.results[0]["text"]
+        ):
             return (
                 False,
                 new_error(
@@ -389,12 +392,16 @@ def validate_pgp_keys(pub_key, enc_priv_key):
                 None,
             )
     # Exports the public key again for uniform formatting.
-    pub_key = gpg.export_keys(import_pub_result.fingerprints[0])
+    if import_pub_result.fingerprints:
+        pub_key = gpg.export_keys(import_pub_result.fingerprints[0])
 
     # Try to import the encrypted private key (without passphrase)
     import_priv_result = gpg.import_keys(enc_priv_key)
     if not import_priv_result.sec_imported == 1:
-        if "Not actually changed" not in import_priv_result.results[0]["text"]:
+        if (
+            import_priv_result.results
+            and "Not actually changed" not in import_priv_result.results[0]["text"]
+        ):
             return (
                 False,
                 new_error(
@@ -501,7 +508,9 @@ def objects_to_hyperlinks(logs: str) -> str:
         for obj in objects:
             logs = re.sub(
                 rf"{obj}\(([0-9a-fA-F\-A-F]+),\s*([^)]+)\)",
-                lambda m: f'<b><a href="/coordinator/api/{obj.lower()}/{m.group(1)}">{m.group(2)}</a></b>',
+                lambda m: (
+                    f'<b><a href="/coordinator/api/{obj.lower()}/{m.group(1)}">{m.group(2)}</a></b>'
+                ),
                 logs,
                 flags=re.DOTALL,
             )
