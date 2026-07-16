@@ -377,7 +377,7 @@ def _allow_new_robot(rate, window):
     return True
 
 
-_ARMOR_BODY_LINE = re.compile(r"^[A-Za-z0-9+/]+=?$")
+_ARMOR_BODY_LINE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 
 
 def _is_well_formed_pgp_key(key_text: str) -> bool:
