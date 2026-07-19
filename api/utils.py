@@ -1,8 +1,9 @@
 import json
 import logging
 import re
-import time
 from html import escape
+from datetime import datetime, timedelta
+from datetime import timezone as datetime_timezone
 
 import gnupg
 import numpy as np
@@ -10,6 +11,7 @@ import requests
 import ring
 from base91 import decode, encode
 from decouple import config
+from django.utils import timezone
 
 from api.errors import new_error
 from api.models import Robot
@@ -359,24 +361,6 @@ def compute_avg_premium(queryset):
     return weighted_median_premium, total_volume
 
 
-_robot_creation_times = []
-
-
-def _allow_new_robot(rate, window):
-    """Limits new robot creation rate. Set ROBOT_CREATION_RATE > 0 to enable (0 disables)."""
-    if rate <= 0:
-        return True
-    now = time.time()
-    cutoff = now - window
-    recent = [t for t in _robot_creation_times if t > cutoff]
-    _robot_creation_times.clear()
-    _robot_creation_times.extend(recent)
-    if len(recent) >= rate:
-        return False
-    _robot_creation_times.append(now)
-    return True
-
-
 _ARMOR_BODY_LINE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 
 
@@ -434,20 +418,6 @@ def validate_pgp_keys(pub_key, enc_priv_key):
             None,
         )
 
-    if not _allow_new_robot(
-        config("ROBOT_CREATION_RATE", cast=int, default=0),
-        config("ROBOT_CREATION_WINDOW", cast=int, default=1),
-    ):
-        return (
-            False,
-            new_error(
-                7002,
-                {"bad_keys_context": "Too many robots being created. Try again later."},
-            ),
-            None,
-            None,
-        )
-
     gpg = gnupg.GPG(gnupghome=config("GNUPG_DIR", default=None))
 
     # Try to import the public key
@@ -476,6 +446,21 @@ def validate_pgp_keys(pub_key, enc_priv_key):
                 None,
                 None,
             )
+    # Check key creation timestamp
+    if import_pub_result.fingerprints:
+        keys = gpg.list_keys(keys=import_pub_result.fingerprints[0])
+        if keys:
+            key_creation = datetime.fromtimestamp(
+                int(keys[0]["date"]), tz=datetime_timezone.utc
+            )
+            if key_creation > timezone.now() - timedelta(hours=12):
+                return (
+                    False,
+                    new_error(1056, {"key_creation_date": key_creation.isoformat()}),
+                    None,
+                    None,
+                )
+
     # Exports the public key again for uniform formatting.
     if import_pub_result.fingerprints:
         pub_key = gpg.export_keys(import_pub_result.fingerprints[0])
